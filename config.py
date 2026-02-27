@@ -9,6 +9,13 @@ qwen_image_2511_json = {
     #     "dit_device": "cuda:0"
     # },
 
+    # "offload": {
+    #     "cpu_offload": True,
+    #     "offload_granularity": "block",
+    #     "text_encoder_offload": True,
+    #     "vae_offload": False
+    # },
+
     "lora_configs": [
         {
             "path": "/home/lilonghao/model/LightX2V/examples/qwen_image/weights/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors",
@@ -38,6 +45,13 @@ qwen_image_layered_json = {
     #     "text_encoder_device": "cuda:1",
     #     "vae_device": "cuda:1",
     #     "dit_device": "cuda:0"
+    # },
+
+    # "offload": {
+    #     "cpu_offload": True,
+    #     "offload_granularity": "block",
+    #     "text_encoder_offload": True,
+    #     "vae_offload": False
     # },
 
     "lora_configs": [

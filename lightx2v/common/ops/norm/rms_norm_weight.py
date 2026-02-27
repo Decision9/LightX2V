@@ -61,7 +61,7 @@ class RMSWeightTemplate(metaclass=ABCMeta):
     def _get_actual_weight(self):
         if not hasattr(self, "weight_diff"):
             return self.weight
-        return self.weight + self.weight_diff
+        return self.weight + self.weight_diff.to(self.weight.device)
 
     def register_diff(self, weight_dict):
         if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:

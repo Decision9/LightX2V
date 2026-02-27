@@ -14,7 +14,7 @@ class LoraAdapter:
         self.model = model
         self.lora_metadata = {}
         self.lora_loader = LoRALoader(model_prefix=model_prefix)
-        self.device = torch.device(AI_DEVICE) if not self.model.config.get("cpu_offload", False) else torch.device("cpu")
+        self.device = self.model.device if not self.model.config.get("cpu_offload", False) else torch.device("cpu")
 
     def _load_lora_file(self, file_path):
         with safe_open(file_path, framework="pt") as f:

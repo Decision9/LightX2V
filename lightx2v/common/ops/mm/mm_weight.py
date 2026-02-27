@@ -144,23 +144,24 @@ class MMWeightTemplate(metaclass=ABCMeta):
     def _get_actual_weight(self):
         if not hasattr(self, "weight_diff"):
             return self.weight
-        return self.weight + self.weight_diff
+        return self.weight + self.weight_diff.to(self.weight.device)
 
     def _get_actual_bias(self, bias=None):
         if bias is not None:
             if not hasattr(self, "bias_diff"):
                 return bias
-            return bias + self.bias_diff
+            return bias + self.bias_diff.to(bias.device)
         else:
             if not hasattr(self, "bias") or self.bias is None:
                 return None
             if not hasattr(self, "bias_diff"):
                 return self.bias
-            return self.bias + self.bias_diff
+            return self.bias + self.bias_diff.to(self.bias.device)
 
     def apply_lora(self, input_tensor):
-        h = torch.mm(input_tensor, self.lora_down.t())
-        out = torch.mm(h, self.lora_up.t())
+        device = input_tensor.device
+        h = torch.mm(input_tensor, self.lora_down.to(device).t())
+        out = torch.mm(h, self.lora_up.to(device).t())
         return self.lora_strength * self.lora_scale * out
 
     def set_config(self, config={}):
@@ -188,7 +189,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
                     self.lora_alpha = weight_dict[self.lora_alpha_name]
                     self.lora_scale = self.lora_alpha / self.lora_down.shape[0]
                 else:
-                    self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
+                    self.lora_scale = torch.tensor(1.0)
                 logger.debug(f"Register LoRA to {self.weight_name} with lora_scale={self.lora_scale}")
 
     def update_lora(self, weight_dict, lora_strength=1):
@@ -202,7 +203,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
                     self.lora_alpha.copy_(weight_dict[self.lora_alpha_name])
                     self.lora_scale.copy_(self.lora_alpha / self.lora_down.shape[0])
                 else:
-                    self.lora_scale = torch.tensor(1.0, device=AI_DEVICE)
+                    self.lora_scale = torch.tensor(1.0)
                 logger.debug(f"Update LoRA to {self.weight_name}")
 
     def remove_lora(self):

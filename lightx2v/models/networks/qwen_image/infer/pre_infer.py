@@ -29,7 +29,7 @@ class QwenImagePreInfer:
         embed0 = weights.time_text_embed_timestep_embedder_linear_2.apply(embed0)
 
         if self.use_additional_t_cond:
-            is_rgb = torch.tensor([0] * 1).to(device=AI_DEVICE, dtype=torch.long)
+            is_rgb = torch.tensor([0] * 1).to(device=getattr(self.scheduler, "dit_device", AI_DEVICE), dtype=torch.long)
             addition_t_emb = weights.time_text_embed_addition_t_embedding.apply(is_rgb)
             addition_t_emb = addition_t_emb.to(dtype=hidden_states.dtype)
             embed0 = embed0 + addition_t_emb

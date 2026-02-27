@@ -56,6 +56,17 @@ class QwenImageRunner(DefaultRunner):
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
 
     def __init__(self, config):
+        # Initialize multi-GPU device config before super().__init__() since
+        # the parent calls init_scheduler() which needs self.dit_device.
+        self.multi_gpu_config = config.get("multi_gpu_config", None)
+        if self.multi_gpu_config:
+            self.text_encoder_device = torch.device(self.multi_gpu_config.get("text_encoder_device", AI_DEVICE))
+            self.vae_device = torch.device(self.multi_gpu_config.get("vae_device", AI_DEVICE))
+            self.dit_device = torch.device(self.multi_gpu_config.get("dit_device", AI_DEVICE))
+        else:
+            self.text_encoder_device = None
+            self.vae_device = None
+            self.dit_device = None
         super().__init__(config)
         self.is_layered = self.config.get("layered", False)
         if self.is_layered:
@@ -68,18 +79,8 @@ class QwenImageRunner(DefaultRunner):
         if self.text_encoder_type in ["lightllm_service", "lightllm_kernel"]:
             logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
         
-        # ========== 多 GPU 设备配置 ==========
-        # 支持将不同组件加载到不同的 GPU 设备上
-        self.multi_gpu_config = config.get("multi_gpu_config", None)
         if self.multi_gpu_config:
-            self.text_encoder_device = torch.device(self.multi_gpu_config.get("text_encoder_device", AI_DEVICE))
-            self.vae_device = torch.device(self.multi_gpu_config.get("vae_device", AI_DEVICE))
-            self.dit_device = torch.device(self.multi_gpu_config.get("dit_device", AI_DEVICE))
             logger.info(f"多 GPU 模式已启用: Text Encoder -> {self.text_encoder_device}, VAE -> {self.vae_device}, DiT -> {self.dit_device}")
-        else:
-            self.text_encoder_device = None
-            self.vae_device = None
-            self.dit_device = None
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
@@ -429,7 +430,10 @@ class QwenImageRunner(DefaultRunner):
         self.input_info.image_shapes = image_shapes
 
     def init_scheduler(self):
-        self.scheduler = QwenImageScheduler(self.config)
+        scheduler_config = self.config.copy()
+        if self.dit_device is not None:
+            scheduler_config["dit_device"] = str(self.dit_device)
+        self.scheduler = QwenImageScheduler(scheduler_config)
 
     def get_encoder_output_i2v(self):
         pass

@@ -423,6 +423,7 @@ class QwenImageScheduler(BaseScheduler):
         self.is_layered = config.get("layered", False)
         if self.is_layered:
             self.layers = config.get("layers", 4)
+        self.dit_device = torch.device(config.get("dit_device", str(AI_DEVICE)))
         scheduler_path = config.get("scheduler_path", os.path.join(config["model_path"], "scheduler"))
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(scheduler_path)
         with open(os.path.join(config["model_path"], "scheduler", "scheduler_config.json"), "r") as f:
@@ -484,12 +485,12 @@ class QwenImageScheduler(BaseScheduler):
         self.input_info = input_info
         shape = input_info.target_shape
         width, height = shape[-1], shape[-2]
-        latents = randn_tensor(shape, generator=self.generator, device=AI_DEVICE, dtype=self.dtype)
+        latents = randn_tensor(shape, generator=self.generator, device=self.dit_device, dtype=self.dtype)
         if self.is_layered:
             latents = self._pack_latents(latents, 1, self.config.get("num_channels_latents", 16), height, width, self.layers + 1)
         else:
             latents = self._pack_latents(latents, 1, self.config.get("num_channels_latents", 16), height, width)
-        latent_image_ids = self._prepare_latent_image_ids(1, height // 2, width // 2, AI_DEVICE, self.dtype)
+        latent_image_ids = self._prepare_latent_image_ids(1, height // 2, width // 2, self.dit_device, self.dtype)
         self.latents = latents
         self.latent_image_ids = latent_image_ids
         self.noise_pred = None
@@ -513,7 +514,7 @@ class QwenImageScheduler(BaseScheduler):
         timesteps, num_inference_steps = retrieve_timesteps(
             self.scheduler,
             num_inference_steps,
-            AI_DEVICE,
+            self.dit_device,
             sigmas=sigmas,
             mu=mu,
         )
@@ -529,11 +530,11 @@ class QwenImageScheduler(BaseScheduler):
         if self.config["task"] == "i2i":
             self.generator = torch.Generator().manual_seed(input_info.seed)
         elif self.config["task"] == "t2i":
-            self.generator = torch.Generator(device=AI_DEVICE).manual_seed(input_info.seed)
+            self.generator = torch.Generator(device=self.dit_device).manual_seed(input_info.seed)
         self.prepare_latents(input_info)
         self.set_timesteps()
 
-        self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=AI_DEVICE)
+        self.image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[0], device=self.dit_device)
         if self.config.get("rope_type", "flashinfer") == "flashinfer":
             cos_half_img = self.image_rotary_emb[0].real.contiguous()
             sin_half_img = self.image_rotary_emb[0].imag.contiguous()
@@ -551,7 +552,7 @@ class QwenImageScheduler(BaseScheduler):
             self.image_rotary_emb[0] = torch.chunk(self.image_rotary_emb[0], world_size, dim=0)[cur_rank]
 
         if self.config["enable_cfg"]:
-            self.negative_image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[1], device=AI_DEVICE)
+            self.negative_image_rotary_emb = self.pos_embed(self.input_info.image_shapes, input_info.txt_seq_lens[1], device=self.dit_device)
             if self.config.get("rope_type", "flashinfer") == "flashinfer":
                 cos_half_img = self.negative_image_rotary_emb[0].real.contiguous()
                 sin_half_img = self.negative_image_rotary_emb[0].imag.contiguous()
@@ -569,7 +570,7 @@ class QwenImageScheduler(BaseScheduler):
                 self.negative_image_rotary_emb[0] = torch.chunk(self.negative_image_rotary_emb[0], world_size, dim=0)[cur_rank]
 
         if self.zero_cond_t:
-            self.modulate_index = torch.tensor([[0] * prod(sample[0]) + [1] * sum([prod(s) for s in sample[1:]]) for sample in self.input_info.image_shapes], device=AI_DEVICE, dtype=torch.int)
+            self.modulate_index = torch.tensor([[0] * prod(sample[0]) + [1] * sum([prod(s) for s in sample[1:]]) for sample in self.input_info.image_shapes], device=self.dit_device, dtype=torch.int)
             if self.seq_p_group is not None:
                 world_size = dist.get_world_size(self.seq_p_group)
                 cur_rank = dist.get_rank(self.seq_p_group)
@@ -583,7 +584,7 @@ class QwenImageScheduler(BaseScheduler):
 
     def step_pre(self, step_index):
         super().step_pre(step_index)
-        timestep_input = torch.tensor([self.timesteps[self.step_index]], device=AI_DEVICE, dtype=self.dtype) / 1000
+        timestep_input = torch.tensor([self.timesteps[self.step_index]], device=self.dit_device, dtype=self.dtype) / 1000
         if self.zero_cond_t:
             timestep_input = torch.cat([timestep_input, timestep_input * 0], dim=0)
         self.timesteps_proj = get_timestep_embedding(timestep_input).to(torch.bfloat16)

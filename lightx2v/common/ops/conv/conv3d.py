@@ -74,8 +74,8 @@ class Conv3dWeight(Conv3dWeightTemplate):
     def apply(self, input_tensor):
         output_tensor = torch.nn.functional.conv3d(
             input_tensor,
-            weight=self.weight + self.weight_diff,
-            bias=self.bias + self.bias_diff,
+            weight=self.weight + self.weight_diff.to(self.weight.device),
+            bias=self.bias + self.bias_diff.to(self.bias.device),
             stride=self.stride,
             padding=self.padding,
             dilation=self.dilation,

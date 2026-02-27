@@ -71,14 +71,14 @@ class LNWeightTemplate(metaclass=ABCMeta):
             return None
         if not hasattr(self, "weight_diff"):
             return self.weight
-        return self.weight + self.weight_diff
+        return self.weight + self.weight_diff.to(self.weight.device)
 
     def _get_actual_bias(self):
         if self.bias is None:
             return None
         if not hasattr(self, "bias_diff"):
             return self.bias
-        return self.bias + self.bias_diff
+        return self.bias + self.bias_diff.to(self.bias.device)
 
     def load(self, weight_dict):
         if not self.create_cuda_buffer and not self.create_cpu_buffer and not self.lazy_load:
