@@ -24,10 +24,16 @@ class AutoencoderKLQwenImageVAE:
             self.layers = config.get("layers", 4)
 
         self.cpu_offload = config.get("vae_cpu_offload", config.get("cpu_offload", False))
-        if self.cpu_offload:
+        
+        # 多 GPU 支持：优先使用 vae_device 配置
+        if config.get("vae_device"):
+            self.device = torch.device(config["vae_device"])
+            self.cpu_offload = False  # 使用多 GPU 时禁用 CPU offload
+        elif self.cpu_offload:
             self.device = torch.device("cpu")
         else:
             self.device = torch.device(AI_DEVICE)
+        
         self.dtype = GET_DTYPE()
         self.latent_channels = 16
         self.vae_latents_mean = [-0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508, 0.4134, -0.0715, 0.5517, -0.3632, -0.1922, -0.9497, 0.2503, -0.2921]
@@ -36,10 +42,58 @@ class AutoencoderKLQwenImageVAE:
 
     def load(self):
         vae_path = self.config.get("vae_path", os.path.join(self.config["model_path"], "vae"))
-        self.model = AutoencoderKLQwenImage.from_pretrained(vae_path).to(self.device).to(self.dtype)
+        if self.is_layered:
+            # Layered VAE 的 decoder.conv_out 是 4 通道（RGBA），但 diffusers 里硬编码了 3。
+            # 先忽略形状不匹配加载，再手动修正 conv_out 的权重。
+            self.model = AutoencoderKLQwenImage.from_pretrained(
+                vae_path, ignore_mismatched_sizes=True, low_cpu_mem_usage=False
+            ).to(self.device).to(self.dtype)
+            self._fix_layered_conv_out(vae_path)
+        else:
+            self.model = AutoencoderKLQwenImage.from_pretrained(vae_path).to(self.device).to(self.dtype)
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.config["vae_scale_factor"] * 2)
         if self.config.get("use_tiling_vae", False):
             self.model.enable_tiling()
+
+    def _fix_layered_conv_out(self, vae_path):
+        """将 encoder.conv_in 替换为 4 通道输入、decoder.conv_out 替换为 4 通道输出，并从 checkpoint 加载真实权重。"""
+        import glob
+        from safetensors.torch import load_file as safetensors_load
+
+        # 构造新的 4 通道 encoder.conv_in（输入 RGBA）
+        old_enc_conv_in = self.model.encoder.conv_in
+        new_enc_conv_in = type(old_enc_conv_in)(4, old_enc_conv_in.out_channels, 3, padding=1).to(self.device).to(self.dtype)
+
+        # 构造新的 4 通道 decoder.conv_out（输出 RGBA）
+        old_dec_conv_out = self.model.decoder.conv_out
+        new_dec_conv_out = type(old_dec_conv_out)(old_dec_conv_out.in_channels, 4, 3, padding=1).to(self.device).to(self.dtype)
+
+        # 一次遍历所有分片，同时加载两个权重
+        enc_loaded = False
+        dec_loaded = False
+        for shard_file in sorted(glob.glob(os.path.join(vae_path, "*.safetensors"))):
+            sd = safetensors_load(shard_file)
+            if not enc_loaded and "encoder.conv_in.weight" in sd:
+                new_enc_conv_in.weight = torch.nn.Parameter(
+                    sd["encoder.conv_in.weight"].to(self.device, self.dtype)
+                )
+                new_enc_conv_in.bias = torch.nn.Parameter(
+                    sd["encoder.conv_in.bias"].to(self.device, self.dtype)
+                )
+                enc_loaded = True
+            if not dec_loaded and "decoder.conv_out.weight" in sd:
+                new_dec_conv_out.weight = torch.nn.Parameter(
+                    sd["decoder.conv_out.weight"].to(self.device, self.dtype)
+                )
+                new_dec_conv_out.bias = torch.nn.Parameter(
+                    sd["decoder.conv_out.bias"].to(self.device, self.dtype)
+                )
+                dec_loaded = True
+            if enc_loaded and dec_loaded:
+                break
+
+        self.model.encoder.conv_in = new_enc_conv_in
+        self.model.decoder.conv_out = new_dec_conv_out
 
     @staticmethod
     def _unpack_latents(latents, height, width, vae_scale_factor, layers=None):

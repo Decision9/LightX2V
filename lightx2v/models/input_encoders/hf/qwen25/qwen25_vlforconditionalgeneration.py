@@ -41,14 +41,13 @@ PREFERRED_QWENIMAGE_RESOLUTIONS = [
     (1568, 672),
 ]
 
-
 def calculate_dimensions(target_area, ratio):
     width = math.sqrt(target_area * ratio)
     height = width / ratio
 
     width = round(width / 32) * 32
     height = round(height / 32) * 32
-
+    
     return width, height
 
 
@@ -64,7 +63,9 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         """
         self.CONDITION_IMAGE_SIZE = config.get("CONDITION_IMAGE_SIZE", 384 * 384)
         self.USE_IMAGE_ID_IN_PROMPT = config.get("USE_IMAGE_ID_IN_PROMPT", True)
-        self.VAE_IMAGE_SIZE = 1024 * 1024
+        # VAE_IMAGE_SIZE 可配置，默认 1024*1024，可通过 config["vae_image_size"] 修改
+        default_vae_size = 1024 * 1024
+        self.VAE_IMAGE_SIZE = config.get("vae_image_size", default_vae_size)
         self.is_layered = self.config.get("layered", False)
         if self.is_layered:
             self.resolution = self.config.get("resolution", 640)
@@ -72,25 +73,38 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
 
         self.cpu_offload = config.get("qwen25vl_cpu_offload", config.get("cpu_offload", False))
         self.dtype = torch.bfloat16
+        # 多 GPU 支持：读取指定的 text encoder 设备
+        self.text_encoder_device = config.get("text_encoder_device", AI_DEVICE)
         self.load()
 
     def load(self):
+        # 使用多 GPU 配置的设备或默认 AI_DEVICE
+        target_device = self.text_encoder_device
+        
         if self.config.get("qwen25vl_quantized", False):
             assert self.config["qwen25vl_quant_scheme"] == "int4"
             if self.config["cpu_offload"]:
                 self.device_map = {
-                    "lm_head": AI_DEVICE,
+                    "lm_head": target_device,
                     "model.visual": "cpu",
                     "model.language_model": "cpu",
                 }
             else:
-                self.device_map = AI_DEVICE
-            self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(self.config["qwen25vl_quantized_ckpt"], dtype=torch.bfloat16, device_map=self.device_map, low_cpu_mem_usage=True)
+                self.device_map = target_device
+            self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                self.config["qwen25vl_quantized_ckpt"], 
+                dtype=torch.bfloat16, 
+                device_map=self.device_map, 
+                low_cpu_mem_usage=True
+            )
         else:
-            self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(os.path.join(self.config["model_path"], "text_encoder"), torch_dtype=torch.bfloat16)
-
-        if not self.cpu_offload:
-            self.text_encoder = self.text_encoder.to(AI_DEVICE)
+            # 直接加载到指定设备，避免先加载到默认设备再移动
+            self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                os.path.join(self.config["model_path"], "text_encoder"), 
+                torch_dtype=torch.bfloat16,
+                device_map=target_device if not self.cpu_offload else "cpu",
+                low_cpu_mem_usage=True
+            )
 
         qwen25vl_tokenizer_path = self.config.get("qwen25vl_tokenizer_path", os.path.join(self.config["model_path"], "tokenizer"))
         self.tokenizer = Qwen2Tokenizer.from_pretrained(qwen25vl_tokenizer_path)
@@ -145,7 +159,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             images=prompt_image,
             padding=True,
             return_tensors="pt",
-        ).to(AI_DEVICE)
+        ).to(self.text_encoder_device)
 
         generated_ids = self.text_encoder.generate(**model_inputs, max_new_tokens=512)
         generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(model_inputs.input_ids, generated_ids)]
@@ -204,7 +218,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
                 images=condition_image_list,
                 padding=True,
                 return_tensors="pt",
-            ).to(AI_DEVICE)
+            ).to(self.text_encoder_device)
 
             encoder_hidden_states = self.text_encoder(
                 input_ids=model_inputs.input_ids,
@@ -218,7 +232,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
             drop_idx = self.prompt_template_encode_start_idx
             txt = [template.format(e) for e in text]
 
-            model_inputs = self.tokenizer(txt, max_length=self.tokenizer_max_length + drop_idx, padding=True, truncation=True, return_tensors="pt").to(AI_DEVICE)
+            model_inputs = self.tokenizer(txt, max_length=self.tokenizer_max_length + drop_idx, padding=True, truncation=True, return_tensors="pt").to(self.text_encoder_device)
             encoder_hidden_states = self.text_encoder(
                 input_ids=model_inputs.input_ids,
                 attention_mask=model_inputs.attention_mask,
@@ -235,7 +249,7 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
         prompt_embeds = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0), u.size(1))]) for u in split_hidden_states])
         encoder_attention_mask = torch.stack([torch.cat([u, u.new_zeros(max_seq_len - u.size(0))]) for u in attn_mask_list])
 
-        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=AI_DEVICE)
+        prompt_embeds = prompt_embeds.to(dtype=self.dtype, device=self.text_encoder_device)
         prompt_embeds_mask = encoder_attention_mask
 
         _, seq_len, _ = prompt_embeds.shape

@@ -67,6 +67,19 @@ class QwenImageRunner(DefaultRunner):
 
         if self.text_encoder_type in ["lightllm_service", "lightllm_kernel"]:
             logger.info(f"Using LightLLM text encoder: {self.text_encoder_type}")
+        
+        # ========== 多 GPU 设备配置 ==========
+        # 支持将不同组件加载到不同的 GPU 设备上
+        self.multi_gpu_config = config.get("multi_gpu_config", None)
+        if self.multi_gpu_config:
+            self.text_encoder_device = torch.device(self.multi_gpu_config.get("text_encoder_device", AI_DEVICE))
+            self.vae_device = torch.device(self.multi_gpu_config.get("vae_device", AI_DEVICE))
+            self.dit_device = torch.device(self.multi_gpu_config.get("dit_device", AI_DEVICE))
+            logger.info(f"多 GPU 模式已启用: Text Encoder -> {self.text_encoder_device}, VAE -> {self.vae_device}, DiT -> {self.dit_device}")
+        else:
+            self.text_encoder_device = None
+            self.vae_device = None
+            self.dit_device = None
 
     @ProfilingContext4DebugL2("Load models")
     def load_model(self):
@@ -75,10 +88,17 @@ class QwenImageRunner(DefaultRunner):
         self.vae = self.load_vae()
 
     def load_transformer(self):
+        # 多 GPU 模式下使用指定的 DiT 设备
+        if self.dit_device is not None:
+            device = self.dit_device
+            logger.info(f"DiT (Transformer) 将加载到设备: {device}")
+        else:
+            device = self.init_device
+        
         qwen_image_model_kwargs = {
             "model_path": os.path.join(self.config["model_path"], "transformer"),
             "config": self.config,
-            "device": self.init_device,
+            "device": device,
         }
         lora_configs = self.config.get("lora_configs")
         if not lora_configs:
@@ -99,6 +119,11 @@ class QwenImageRunner(DefaultRunner):
         encoder_config = self.config.copy()
         lightllm_config = self.config.get("lightllm_config", {})
         encoder_config.update(lightllm_config)
+        
+        # 多 GPU 模式下添加 text encoder 设备配置
+        if self.text_encoder_device is not None:
+            encoder_config["text_encoder_device"] = str(self.text_encoder_device)
+            logger.info(f"Text Encoder 将加载到设备: {self.text_encoder_device}")
 
         if self.text_encoder_type == "lightllm_service":
             from lightx2v.models.input_encoders.lightllm import LightLLMServiceTextEncoder
@@ -112,7 +137,7 @@ class QwenImageRunner(DefaultRunner):
             text_encoder = LightLLMKernelTextEncoder(encoder_config)
         else:  # baseline or default
             logger.info("Loading HuggingFace baseline text encoder")
-            text_encoder = Qwen25_VLForConditionalGeneration_TextEncoder(self.config)
+            text_encoder = Qwen25_VLForConditionalGeneration_TextEncoder(encoder_config)
 
         text_encoders = [text_encoder]
         return text_encoders
@@ -121,7 +146,14 @@ class QwenImageRunner(DefaultRunner):
         pass
 
     def load_vae(self):
-        vae = AutoencoderKLQwenImageVAE(self.config)
+        # 多 GPU 模式下添加 VAE 设备配置
+        vae_config = self.config.copy()
+        if self.vae_device is not None:
+            vae_config["vae_device"] = str(self.vae_device)
+            vae_config["vae_cpu_offload"] = False  # 禁用 CPU offload
+            logger.info(f"VAE 将加载到设备: {self.vae_device}")
+        
+        vae = AutoencoderKLQwenImageVAE(vae_config)
         return vae
 
     def init_modules(self):
@@ -164,13 +196,14 @@ class QwenImageRunner(DefaultRunner):
         }
 
     def read_image_input(self, img_path):
-        if isinstance(img_path, Image.Image):
-            img_ori = img_path
+        if self.config.get("layered", False):
+            target_mode = "RGBA"
         else:
-            if self.config.get("layered", False):
-                img_ori = Image.open(img_path).convert("RGBA")
-            else:
-                img_ori = Image.open(img_path).convert("RGB")
+            target_mode = "RGB"
+        if isinstance(img_path, Image.Image):
+            img_ori = img_path if img_path.mode == target_mode else img_path.convert(target_mode)
+        else:
+            img_ori = Image.open(img_path).convert(target_mode)
         if GET_RECORDER_MODE():
             width, height = img_ori.size
             monitor_cli.lightx2v_input_image_len.observe(width * height)
@@ -180,7 +213,13 @@ class QwenImageRunner(DefaultRunner):
 
     @ProfilingContext4DebugL2("Run Encoders")
     def _run_input_encoder_local_i2i(self):
-        image_paths_list = self.input_info.image_path.split(",")
+        raw = self.input_info.image_path
+        if isinstance(raw, Image.Image):
+            image_paths_list = [raw]
+        elif isinstance(raw, list):
+            image_paths_list = raw
+        else:
+            image_paths_list = raw.split(",")
         images_list = []
         for image_path in image_paths_list:
             _, image = self.read_image_input(image_path)
@@ -229,13 +268,43 @@ class QwenImageRunner(DefaultRunner):
                 neg_prompt_embeds, _, _ = self.text_encoders[0].infer([neg_prompt], image_list)
                 self.input_info.txt_seq_lens.append(neg_prompt_embeds.shape[1])
                 text_encoder_output["negative_prompt_embeds"] = neg_prompt_embeds
+        
+        # 多 GPU 模式下，将 text encoder 输出移动到 DiT 设备
+        if self.dit_device is not None:
+            text_encoder_output = self._move_to_device(text_encoder_output, self.dit_device)
+            logger.debug(f"Text Encoder 输出已传输到 DiT 设备: {self.dit_device}")
+        
         return text_encoder_output
+    
+    def _move_to_device(self, obj, device):
+        """递归地将 tensor 或包含 tensor 的字典/列表移动到指定设备"""
+        if isinstance(obj, torch.Tensor):
+            return obj.to(device)
+        elif isinstance(obj, dict):
+            return {k: self._move_to_device(v, device) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._move_to_device(item, device) for item in obj]
+        elif isinstance(obj, tuple):
+            return tuple(self._move_to_device(item, device) for item in obj)
+        else:
+            return obj
 
     @ProfilingContext4DebugL1("Run VAE Encoder", recorder_mode=GET_RECORDER_MODE(), metrics_func=monitor_cli.lightx2v_run_vae_encoder_image_duration, metrics_labels=["QwenImageRunner"])
     def run_vae_encoder(self, image):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae = self.load_vae()
+        
+        # 多 GPU 模式下，将图像移动到 VAE 设备
+        if self.vae_device is not None:
+            image = image.to(self.vae_device)
+        
         image_latents = self.vae.encode_vae_image(image.to(GET_DTYPE()))
+        
+        # 多 GPU 模式下，将 VAE 输出移动到 DiT 设备
+        if self.dit_device is not None:
+            image_latents = image_latents.to(self.dit_device)
+            logger.debug(f"VAE Encoder 输出已传输到 DiT 设备: {self.dit_device}")
+        
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae
             torch_device_module.empty_cache()
@@ -251,6 +320,12 @@ class QwenImageRunner(DefaultRunner):
     def run_vae_decoder(self, latents):
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             self.vae = self.load_vae()
+        
+        # 多 GPU 模式下，将 latents 从 DiT 设备移动到 VAE 设备
+        if self.vae_device is not None:
+            latents = latents.to(self.vae_device)
+            logger.debug(f"Latents 已传输到 VAE 设备: {self.vae_device}")
+        
         images = self.vae.decode(latents, self.input_info)
         if self.config.get("lazy_load", False) or self.config.get("unload_modules", False):
             del self.vae
@@ -312,15 +387,15 @@ class QwenImageRunner(DefaultRunner):
         return None
 
     def set_target_shape(self):
-        custom_shape = self.get_custom_shape()
-        if custom_shape is not None:
-            width, height = custom_shape
-        else:
-            width, height = self.input_info.original_size[-1]
-            calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, width / height)
-            multiple_of = self.config["vae_scale_factor"] * 2
-            width = calculated_width // multiple_of * multiple_of
-            height = calculated_height // multiple_of * multiple_of
+        # custom_shape = self.get_custom_shape()
+        # if custom_shape is not None:
+        #     width, height = custom_shape
+        # else:
+        width, height = self.input_info.original_size[0]
+        calculated_width, calculated_height, _ = calculate_dimensions(self.resolution * self.resolution, width / height)
+        multiple_of = self.config["vae_scale_factor"] * 2
+        width = calculated_width // multiple_of * multiple_of
+        height = calculated_height // multiple_of * multiple_of
         logger.info(f"Qwen Image Runner set target shape: {width}x{height}")
         self.input_info.auto_width = width
         self.input_info.auto_height = height
@@ -383,9 +458,16 @@ class QwenImageRunner(DefaultRunner):
         self.end_run()
 
         if not dist.is_initialized() or dist.get_rank() == 0:
-            if not input_info.return_result_tensor:
-                image_prefix = input_info.save_result_path.rsplit(".", 1)[0]
-                image_suffix = input_info.save_result_path.rsplit(".", 1)[1] if len(input_info.save_result_path.rsplit(".", 1)) > 1 else "png"
+            if not input_info.return_result_tensor and input_info.save_result_path is not None:
+                save_path = input_info.save_result_path
+                # 若 save_path 是目录（以 / 结尾或本身是已存在目录），则在其下生成默认文件名
+                if os.path.isdir(save_path) or save_path.endswith("/") or save_path.endswith(os.sep):
+                    image_prefix = os.path.join(save_path, "output")
+                    image_suffix = "png"
+                else:
+                    parts = save_path.rsplit(".", 1)
+                    image_prefix = parts[0]
+                    image_suffix = parts[1] if len(parts) > 1 else "png"
                 if isinstance(images[0], list) and len(images[0]) > 1:
                     for idx, image in enumerate(images[0]):
                         image.save(f"{image_prefix}_{idx:05d}.{image_suffix}")
@@ -400,6 +482,6 @@ class QwenImageRunner(DefaultRunner):
         gc.collect()
 
         if input_info.return_result_tensor:
-            return {"images": images}
-        elif input_info.save_result_path is not None:
-            return {"images": None}
+            return {"images": images}  # pt tensors
+        else:
+            return {"images": images}  # PIL images (saved to disk if save_result_path was set)

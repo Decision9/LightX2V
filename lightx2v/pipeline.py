@@ -402,7 +402,7 @@ class LightX2VPipeline:
         seed,
         prompt,
         negative_prompt,
-        save_result_path,
+        save_result_path=None,
         image_path=None,
         image_strength=None,
         last_frame_path=None,
@@ -412,6 +412,8 @@ class LightX2VPipeline:
         src_mask=None,
         return_result_tensor=False,
         target_shape=[],
+        resolution=None,  # 动态分辨率配置，默认 None 使用初始化时的值
+        vae_image_size=None,  # 动态 VAE 图像大小配置，默认 None 使用初始化时的值
     ):
         # Run inference (following LightX2V pattern)
         # Note: image_path supports comma-separated paths for multiple images
@@ -430,12 +432,25 @@ class LightX2VPipeline:
         self.target_shape = target_shape
         self.image_strength = image_strength
 
+        # 动态更新分辨率配置
+        if resolution is not None:
+            self.runner.resolution = resolution
+            self.runner.config["resolution"] = resolution
+        if vae_image_size is not None:
+            # 更新 text encoder 的 VAE_IMAGE_SIZE
+            if hasattr(self.runner, 'text_encoders') and self.runner.text_encoders:
+                for text_encoder in self.runner.text_encoders:
+                    if hasattr(text_encoder, 'VAE_IMAGE_SIZE'):
+                        text_encoder.VAE_IMAGE_SIZE = vae_image_size
+
         input_info = init_empty_input_info(self.task)
         seed_all(self.seed)
         update_input_info_from_dict(input_info, self)
-        self.runner.run_pipeline(input_info)
+        result = self.runner.run_pipeline(input_info)
         logger.info("Video generated successfully!")
-        logger.info(f"Video Saved in {save_result_path}")
+        if save_result_path is not None:
+            logger.info(f"Video Saved in {save_result_path}")
+        return result
 
     def _init_runner(self, config):
         torch.set_grad_enabled(False)
