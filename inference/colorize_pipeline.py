@@ -53,7 +53,8 @@ def _get_pipeline_layered() -> QwenImagePipeline:
         _pipeline_layered = QwenImagePipeline(qwen_image_layered_json)
     return _pipeline_layered
 
-
+pipe_2511 = _get_pipeline_2511()
+pipe_layered = _get_pipeline_layered()
 # ---------------------------------------------------------------------------
 # Core function
 # ---------------------------------------------------------------------------
@@ -112,24 +113,22 @@ def colorize(
     # ------------------------------------------------------------------
     # 2. qwen_image_2511：上色
     # ------------------------------------------------------------------
-    pipe_2511 = _get_pipeline_2511()
     colored_images = pipe_2511.generate(
         image_path=input_images,
-        prompt=prompt,
-        negative_prompt=negative_prompt,
+        prompt="Please keep the original lineart of Picture 1 unchanged, and colorize it based on the color information, lighting, shading, and material styles from Picture 2 and Picture 3.",
+        negative_prompt="",
         seed=seed,
     )
     # 取第一张作为上色结果，转 RGBA 供后续处理
     colored: Image.Image = colored_images[0].convert("RGBA")
-    colored.save("debug_colored.png")  # 调试：保存上色结果
+    # colored.save("debug_colored.png")  # 调试：保存上色结果
     # ------------------------------------------------------------------
     # 3. qwen_image_layered：分层提取
     # ------------------------------------------------------------------
-    pipe_layered = _get_pipeline_layered()
     layered_result = pipe_layered.generate(
         image_path=[colored],
         prompt="",
-        negative_prompt=" ",
+        negative_prompt="",
         seed=seed,
     )
     # layered_result[0] 是包含多层 PIL Image 的列表

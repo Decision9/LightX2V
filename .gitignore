@@ -35,3 +35,4 @@ examples/*
 tools/*
 configs/*
 tmp/*
+inference/*
