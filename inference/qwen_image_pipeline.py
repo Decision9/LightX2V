@@ -120,7 +120,7 @@ if __name__ == "__main__":
     # for idx, img in enumerate(images):
     #     img.save(f"./tmp/output_2511_{idx}.png")
 
-    images = [Image.open("/home/lilonghao/model/docker/LightX2V/tmp/output_5.png").convert("RGBA")]
+    images = [Image.open("/home/lilonghao/model/docker/LightX2V/tmp/output_2511_0.png")]
     pipeline = QwenImagePipeline(qwen_image_layered_json)
     images = pipeline.generate(
         image_path=images,  # 上一步生成的图片作为输入

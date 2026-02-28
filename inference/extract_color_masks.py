@@ -56,30 +56,31 @@ def _connected_labels(
     idx = np.arange(N, dtype=np.int32).reshape(H, W)
 
     valid = (alpha >= alpha_min) if has_alpha else np.ones((H, W), dtype=bool)
+    img_i16 = img.astype(np.int16)  # cast once, reused for every direction
 
-    all_rows, all_cols = [], []
+    # Pre-allocate edge index buffers (worst-case size, bidirectional)
+    max_e = H * (W - 1) + (H - 1) * W
+    if connectivity == 8:
+        max_e += 2 * (H - 1) * (W - 1)
+    rows_buf = np.empty(max_e * 2, dtype=np.int32)
+    cols_buf = np.empty(max_e * 2, dtype=np.int32)
+    ptr = 0
 
     # --- horizontal neighbours (left <-> right) ---
-    diff = np.abs(img[:, :-1].astype(np.int16) - img[:, 1:].astype(np.int16))
-    keep = (
-        (diff[..., 0] <= threshold) &
-        (diff[..., 1] <= threshold) &
-        (diff[..., 2] <= threshold) &
-        valid[:, :-1] & valid[:, 1:]
-    )
-    r, c = idx[:, :-1][keep], idx[:, 1:][keep]
-    all_rows += [r, c]; all_cols += [c, r]
+    diff = np.abs(img_i16[:, :-1] - img_i16[:, 1:])
+    keep = (diff.max(axis=2) <= threshold) & valid[:, :-1] & valid[:, 1:]
+    a, b = idx[:, :-1][keep], idx[:, 1:][keep]
+    n = len(a)
+    rows_buf[ptr:ptr+n] = a; cols_buf[ptr:ptr+n] = b; ptr += n
+    rows_buf[ptr:ptr+n] = b; cols_buf[ptr:ptr+n] = a; ptr += n
 
     # --- vertical neighbours (top <-> bottom) ---
-    diff = np.abs(img[:-1, :].astype(np.int16) - img[1:, :].astype(np.int16))
-    keep = (
-        (diff[..., 0] <= threshold) &
-        (diff[..., 1] <= threshold) &
-        (diff[..., 2] <= threshold) &
-        valid[:-1, :] & valid[1:, :]
-    )
-    r, c = idx[:-1, :][keep], idx[1:, :][keep]
-    all_rows += [r, c]; all_cols += [c, r]
+    diff = np.abs(img_i16[:-1] - img_i16[1:])
+    keep = (diff.max(axis=2) <= threshold) & valid[:-1] & valid[1:]
+    a, b = idx[:-1][keep], idx[1:][keep]
+    n = len(a)
+    rows_buf[ptr:ptr+n] = a; cols_buf[ptr:ptr+n] = b; ptr += n
+    rows_buf[ptr:ptr+n] = b; cols_buf[ptr:ptr+n] = a; ptr += n
 
     # --- diagonal neighbours (8-connectivity only) ---
     if connectivity == 8:
@@ -88,20 +89,15 @@ def _connected_labels(
             s1 = slice(max(0,  dc), W + min(0,  dc))
             d0 = slice(max(0, -dr), H + min(0, -dr))
             d1 = slice(max(0, -dc), W + min(0, -dc))
-            diff = np.abs(img[s0, s1].astype(np.int16) - img[d0, d1].astype(np.int16))
-            keep = (
-                (diff[..., 0] <= threshold) &
-                (diff[..., 1] <= threshold) &
-                (diff[..., 2] <= threshold) &
-                valid[s0, s1] & valid[d0, d1]
-            )
-            r, c = idx[s0, s1][keep], idx[d0, d1][keep]
-            all_rows += [r, c]; all_cols += [c, r]
+            diff = np.abs(img_i16[s0, s1] - img_i16[d0, d1])
+            keep = (diff.max(axis=2) <= threshold) & valid[s0, s1] & valid[d0, d1]
+            a, b = idx[s0, s1][keep], idx[d0, d1][keep]
+            n = len(a)
+            rows_buf[ptr:ptr+n] = a; cols_buf[ptr:ptr+n] = b; ptr += n
+            rows_buf[ptr:ptr+n] = b; cols_buf[ptr:ptr+n] = a; ptr += n
 
-    rows = np.concatenate(all_rows)
-    cols = np.concatenate(all_cols)
     graph = csr_matrix(
-        (np.ones(len(rows), dtype=np.bool_), (rows, cols)), shape=(N, N)
+        (np.ones(ptr, dtype=np.bool_), (rows_buf[:ptr], cols_buf[:ptr])), shape=(N, N)
     )
     n_comp, labels_flat = connected_components(graph, directed=False)
     labels = labels_flat.reshape(H, W)
@@ -169,7 +165,9 @@ def flatten_regions(
         result_flat[mf, :3] = mean_color
 
     if has_alpha:
-        result_flat[alpha.ravel() < alpha_min, :3] = 0
+        low_alpha = alpha.ravel() < alpha_min
+        result_flat[low_alpha, :3] = 0
+        result_flat[low_alpha, 3] = 0
 
     return result.reshape(H, W, -1)
 
@@ -215,10 +213,11 @@ def quantize_image(
 
     # Mean RGB per component — fully vectorised with bincount
     img_flat = img.reshape(N, 3).astype(np.float32)
-    mean_rgb = np.zeros((n_comp, 3), dtype=np.float32)
+    img_valid = img_flat[valid]                        # extract once, reuse per channel
+    inv_counts = 1.0 / np.maximum(counts, 1)           # pre-compute reciprocal
+    mean_rgb = np.empty((n_comp, 3), dtype=np.float32)
     for ch in range(3):
-        s = np.bincount(lbl_valid, weights=img_flat[valid, ch], minlength=n_comp)
-        mean_rgb[:, ch] = s / np.maximum(counts, 1)
+        mean_rgb[:, ch] = np.bincount(lbl_valid, weights=img_valid[:, ch], minlength=n_comp) * inv_counts
     mean_rgb = mean_rgb.round().astype(np.uint8)   # (n_comp, 3)
 
     # Build output array
@@ -231,9 +230,11 @@ def quantize_image(
     apply = valid & large[labels_flat]
     result[apply, :3] = mean_rgb[labels_flat[apply]]
 
-    # Black out low-alpha pixels
+    # Zero out low-alpha pixels: set RGB to 0 and alpha to 0
     if has_alpha:
-        result[alpha.ravel() < alpha_min, :3] = 0
+        low_alpha = alpha.ravel() < alpha_min
+        result[low_alpha, :3] = 0
+        result[low_alpha, 3] = 0
 
     return result.reshape(H, W, -1)
 

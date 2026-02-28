@@ -15,6 +15,10 @@ qwen_image_2511_json = {
     #     "text_encoder_offload": True,
     #     "vae_offload": False
     # },
+    # "model_params": {
+    #     "resolution": 1536,
+    #     "vae_image_size": 1536*1536,
+    # },
 
     "lora_configs": [
         {
@@ -30,7 +34,7 @@ qwen_image_2511_json = {
 
     "generator_params": {
         "attn_mode": "sage_attn2",
-        "infer_steps": 8,
+        "infer_steps": 4,
         "guidance_scale": 1,
         "resize_mode": "adaptive"
     }
@@ -56,7 +60,7 @@ qwen_image_layered_json = {
 
     "lora_configs": [
         {
-            "path": "/home/lilonghao/model/DiffSynth-Studio/models/train/Qwen-Image-Layered_lora_lchi/epoch-2.safetensors",
+            "path": "/home/lilonghao/model/DiffSynth-Studio/models/train/Qwen-Image-Layered_lora_wuduan+2dcomics_bk-3_p/epoch-9.safetensors",
             "strength": 1.0
         }
     ],
@@ -64,7 +68,7 @@ qwen_image_layered_json = {
 
     "model_params": {
         "layered": True,
-        "layers": 4,
+        "layers": 6,
         "use_layer3d_rope": True,
         "use_en_prompt": True,
         "use_additional_t_cond": True,
