@@ -174,9 +174,10 @@ class Qwen25_VLForConditionalGeneration_TextEncoder:
 
         if self.is_layered:
             text = [self.get_image_caption(image_list[0])]
-            text = [
-                "A charming anime character with short, light blue hair adorned with white flowers and a purple ribbon stands gracefully. She wears a detailed maid outfit featuring a white blouse with ruffled cuffs and a black apron, accessorized with a bow at the neckline. Her hands are clasped together in front of her, and she gazes slightly downward with a gentle expression. The background is a soft, light blue gradient, giving the scene a serene and ethereal atmosphere."
-            ]
+            # text = [
+            #     "A charming anime character with short, light blue hair adorned with white flowers and a purple ribbon stands gracefully. She wears a detailed maid outfit featuring a white blouse with ruffled cuffs and a black apron, accessorized with a bow at the neckline. Her hands are clasped together in front of her, and she gazes slightly downward with a gentle expression. The background is a soft, light blue gradient, giving the scene a serene and ethereal atmosphere."
+            # ]
+            text = ["an anime image"]
 
         if image_list is not None:
             condition_image_list = []
