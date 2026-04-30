@@ -28,6 +28,7 @@ class QwenImageTransformerWeights(WeightModule):
                 "transformer_blocks",
                 lazy_load=self.lazy_load,
                 lazy_load_path=lazy_load_path,
+                lora_path=lora_path,
             )
             for i in range(self.blocks_num)
         )
@@ -220,6 +221,8 @@ class QwenImageImgAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(
@@ -341,6 +344,8 @@ class QwenImageTxtAttention(WeightModule):
                 create_cpu_buffer,
                 self.lazy_load,
                 self.lazy_load_file,
+                lora_prefix=block_prefix,
+                lora_path=lora_path,
             ),
         )
         self.add_module(

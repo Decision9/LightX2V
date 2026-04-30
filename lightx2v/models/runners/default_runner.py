@@ -517,7 +517,7 @@ class DefaultRunner(BaseRunner):
                 logger.info("LoRA switched successfully")
             return True
         except Exception as e:
-            logger.error(f"Failed to switch LoRA: {e}")
+            logger.error(f"Failed to switch LoRA: {e}"); import traceback; traceback.print_exc(); import traceback; traceback.print_exc()
             return False
 
     def __del__(self):

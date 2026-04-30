@@ -196,14 +196,42 @@ class MMWeightTemplate(metaclass=ABCMeta):
         if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
             if self.lora_down_name in weight_dict:
                 self.has_lora_branch = True
-                self.lora_down.copy_(weight_dict[self.lora_down_name])
-                self.lora_up.copy_(weight_dict[self.lora_up_name])
+                
+                # Check shapes and handle dynamic resizing
+                new_down = weight_dict[self.lora_down_name]
+                new_up = weight_dict[self.lora_up_name]
+                
+                if self.lora_down.shape != new_down.shape:
+                    logger.debug(f"Resizing lora_down for {self.weight_name} from {self.lora_down.shape} to {new_down.shape}")
+                    device = self.lora_down.device
+                    del self.lora_down
+                    self.lora_down = new_down.clone().to(device)
+                else:
+                    self.lora_down.copy_(new_down)
+                    
+                if self.lora_up.shape != new_up.shape:
+                    logger.debug(f"Resizing lora_up for {self.weight_name} from {self.lora_up.shape} to {new_up.shape}")
+                    device = self.lora_up.device
+                    del self.lora_up
+                    self.lora_up = new_up.clone().to(device)
+                else:
+                    self.lora_up.copy_(new_up)
+                    
                 self.lora_strength = lora_strength
                 if self.lora_alpha_name in weight_dict:
-                    self.lora_alpha.copy_(weight_dict[self.lora_alpha_name])
-                    self.lora_scale.copy_(self.lora_alpha / self.lora_down.shape[0])
+                    new_alpha = weight_dict[self.lora_alpha_name]
+                    if not hasattr(self, "lora_alpha") or self.lora_alpha.shape != new_alpha.shape:
+                        self.lora_alpha = new_alpha.clone().to(self.lora_down.device if hasattr(self, "lora_down") else "cpu")
+                    else:
+                        self.lora_alpha.copy_(new_alpha)
+                    
+                    new_scale = self.lora_alpha / self.lora_down.shape[0]
+                    if not hasattr(self, "lora_scale") or self.lora_scale.shape != new_scale.shape:
+                        self.lora_scale = new_scale.clone().to(self.lora_down.device)
+                    else:
+                        self.lora_scale.copy_(new_scale)
                 else:
-                    self.lora_scale = torch.tensor(1.0)
+                    self.lora_scale = torch.tensor(1.0).to(self.lora_down.device)
                 logger.debug(f"Update LoRA to {self.weight_name}")
 
     def remove_lora(self):

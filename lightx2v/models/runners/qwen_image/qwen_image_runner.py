@@ -36,11 +36,25 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
     lora_dynamic_apply = config.get("lora_dynamic_apply", False)
 
     if lora_dynamic_apply:
-        lora_path = lora_configs[0]["path"]
-        lora_strength = lora_configs[0]["strength"]
-        model_kwargs["lora_path"] = lora_path
-        model_kwargs["lora_strength"] = lora_strength
+        dynamic_lora = lora_configs[-1]
+        static_loras = lora_configs[:-1]
+        
+        # 临时关闭 dynamic_apply 以保留 original_weight_dict
+        config["lora_dynamic_apply"] = False
         model = qwen_module(**model_kwargs)
+        
+        if static_loras:
+            assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
+            assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
+            lora_adapter = LoraAdapter(model)
+            lora_adapter.apply_lora(static_loras)
+        else:
+            model._apply_weights()
+            
+        config["lora_dynamic_apply"] = True
+        
+        # 注册动态 LoRA
+        model._register_lora(dynamic_lora["path"], dynamic_lora.get("strength", 1.0))
     else:
         assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
         assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."

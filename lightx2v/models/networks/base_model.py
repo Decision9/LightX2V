@@ -246,6 +246,10 @@ class BaseTransformerModel(CompiledMethodsMixin, ABC):
                 return_key = return_key.replace("lora_A", "lora_down")
             if "lora_B" in return_key:
                 return_key = return_key.replace("lora_B", "lora_up")
+            if "lora_down.default" in return_key:
+                return_key = return_key.replace("lora_down.default", "lora_down")
+            if "lora_up.default" in return_key:
+                return_key = return_key.replace("lora_up.default", "lora_up")
             return return_key
 
         if device == "cpu":
