@@ -162,7 +162,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
         device = input_tensor.device
         h = torch.mm(input_tensor, self.lora_down.to(device).t())
         out = torch.mm(h, self.lora_up.to(device).t())
-        logger.debug(f"Apply LoRA to {self.weight_name}")
+        # logger.debug(f"Apply LoRA to {self.weight_name}")
         return self.lora_strength * self.lora_scale * out
 
     def set_config(self, config={}):
