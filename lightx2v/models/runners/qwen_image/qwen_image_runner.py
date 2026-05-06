@@ -52,7 +52,7 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
             model._apply_weights()
             
         config["lora_dynamic_apply"] = True
-        
+        print(f"Applying dynamic LoRA: {dynamic_lora['path']} with strength {dynamic_lora.get('strength', 1.0)}")
         # 注册动态 LoRA
         model._register_lora(dynamic_lora["path"], dynamic_lora.get("strength", 1.0))
     else:

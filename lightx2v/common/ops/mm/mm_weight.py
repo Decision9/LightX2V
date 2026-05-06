@@ -162,6 +162,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
         device = input_tensor.device
         h = torch.mm(input_tensor, self.lora_down.to(device).t())
         out = torch.mm(h, self.lora_up.to(device).t())
+        logger.debug(f"Apply LoRA to {self.weight_name}")
         return self.lora_strength * self.lora_scale * out
 
     def set_config(self, config={}):
@@ -190,7 +191,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
                     self.lora_scale = self.lora_alpha / self.lora_down.shape[0]
                 else:
                     self.lora_scale = torch.tensor(1.0)
-                logger.debug(f"Register LoRA to {self.weight_name} with lora_scale={self.lora_scale}")
+                # logger.debug(f"Register LoRA to {self.weight_name} with lora_scale={self.lora_scale}")
 
     def update_lora(self, weight_dict, lora_strength=1):
         if not self.lazy_load or self.create_cuda_buffer or self.create_cpu_buffer:
@@ -202,7 +203,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
                 new_up = weight_dict[self.lora_up_name]
                 
                 if self.lora_down.shape != new_down.shape:
-                    logger.debug(f"Resizing lora_down for {self.weight_name} from {self.lora_down.shape} to {new_down.shape}")
+                    # logger.debug(f"Resizing lora_down for {self.weight_name} from {self.lora_down.shape} to {new_down.shape}")
                     device = self.lora_down.device
                     del self.lora_down
                     self.lora_down = new_down.clone().to(device)
@@ -210,7 +211,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
                     self.lora_down.copy_(new_down)
                     
                 if self.lora_up.shape != new_up.shape:
-                    logger.debug(f"Resizing lora_up for {self.weight_name} from {self.lora_up.shape} to {new_up.shape}")
+                    # logger.debug(f"Resizing lora_up for {self.weight_name} from {self.lora_up.shape} to {new_up.shape}")
                     device = self.lora_up.device
                     del self.lora_up
                     self.lora_up = new_up.clone().to(device)
@@ -232,7 +233,7 @@ class MMWeightTemplate(metaclass=ABCMeta):
                         self.lora_scale.copy_(new_scale)
                 else:
                     self.lora_scale = torch.tensor(1.0).to(self.lora_down.device)
-                logger.debug(f"Update LoRA to {self.weight_name}")
+                # logger.debug(f"Update LoRA to {self.weight_name}")
 
     def remove_lora(self):
         if hasattr(self, "lora_down"):
