@@ -37,7 +37,7 @@ def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_con
     device = model_kwargs.get("device")
     previous_device = None
 
-    if isinstance(device, torch.device) and device.type == "cuda":
+    if isinstance(device, torch.device) and device.type == "cuda" and device.index is not None:
         previous_device = torch.cuda.current_device()
         torch.cuda.set_device(device)
 
@@ -365,7 +365,7 @@ class QwenImageRunner(DefaultRunner):
         for step_index in range(total_steps):
             logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
             previous_device = None
-            if self.dit_device is not None and self.dit_device.type == "cuda":
+            if self.dit_device is not None and self.dit_device.type == "cuda" and self.dit_device.index is not None:
                 previous_device = torch.cuda.current_device()
                 torch.cuda.set_device(self.dit_device)
 
