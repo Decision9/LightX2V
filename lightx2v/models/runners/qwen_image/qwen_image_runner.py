@@ -34,33 +34,43 @@ def calculate_dimensions(target_area, ratio):
 
 def build_qwen_image_model_with_lora(qwen_module, config, model_kwargs, lora_configs):
     lora_dynamic_apply = config.get("lora_dynamic_apply", False)
+    device = model_kwargs.get("device")
+    previous_device = None
 
-    if lora_dynamic_apply:
-        dynamic_lora = lora_configs[-1]
-        static_loras = lora_configs[:-1]
-        
-        # 临时关闭 dynamic_apply 以保留 original_weight_dict
-        config["lora_dynamic_apply"] = False
-        model = qwen_module(**model_kwargs)
-        
-        if static_loras:
+    if isinstance(device, torch.device) and device.type == "cuda":
+        previous_device = torch.cuda.current_device()
+        torch.cuda.set_device(device)
+
+    try:
+        if lora_dynamic_apply:
+            dynamic_lora = lora_configs[-1]
+            static_loras = lora_configs[:-1]
+            
+            # 临时关闭 dynamic_apply 以保留 original_weight_dict
+            config["lora_dynamic_apply"] = False
+            model = qwen_module(**model_kwargs)
+            
+            if static_loras:
+                assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
+                assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
+                lora_adapter = LoraAdapter(model)
+                lora_adapter.apply_lora(static_loras)
+            else:
+                model._apply_weights()
+                
+            config["lora_dynamic_apply"] = True
+            print(f"Applying dynamic LoRA: {dynamic_lora['path']} with strength {dynamic_lora.get('strength', 1.0)}")
+            # 注册动态 LoRA
+            model._register_lora(dynamic_lora["path"], dynamic_lora.get("strength", 1.0))
+        else:
             assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
             assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
+            model = qwen_module(**model_kwargs)
             lora_adapter = LoraAdapter(model)
-            lora_adapter.apply_lora(static_loras)
-        else:
-            model._apply_weights()
-            
-        config["lora_dynamic_apply"] = True
-        print(f"Applying dynamic LoRA: {dynamic_lora['path']} with strength {dynamic_lora.get('strength', 1.0)}")
-        # 注册动态 LoRA
-        model._register_lora(dynamic_lora["path"], dynamic_lora.get("strength", 1.0))
-    else:
-        assert not config.get("dit_quantized", False), "Online LoRA only for quantized models; merging LoRA is unsupported."
-        assert not config.get("lazy_load", False), "Lazy load mode does not support LoRA merging."
-        model = qwen_module(**model_kwargs)
-        lora_adapter = LoraAdapter(model)
-        lora_adapter.apply_lora(lora_configs)
+            lora_adapter.apply_lora(lora_configs)
+    finally:
+        if previous_device is not None:
+            torch.cuda.set_device(previous_device)
     return model
 
 
@@ -77,6 +87,7 @@ class QwenImageRunner(DefaultRunner):
             self.text_encoder_device = torch.device(self.multi_gpu_config.get("text_encoder_device", AI_DEVICE))
             self.vae_device = torch.device(self.multi_gpu_config.get("vae_device", AI_DEVICE))
             self.dit_device = torch.device(self.multi_gpu_config.get("dit_device", AI_DEVICE))
+            config["dit_device"] = str(self.dit_device)
         else:
             self.text_encoder_device = None
             self.vae_device = None
@@ -353,15 +364,23 @@ class QwenImageRunner(DefaultRunner):
             total_steps = self.model.scheduler.infer_steps
         for step_index in range(total_steps):
             logger.info(f"==> step_index: {step_index + 1} / {total_steps}")
+            previous_device = None
+            if self.dit_device is not None and self.dit_device.type == "cuda":
+                previous_device = torch.cuda.current_device()
+                torch.cuda.set_device(self.dit_device)
 
-            with ProfilingContext4DebugL1("step_pre"):
-                self.model.scheduler.step_pre(step_index=step_index)
+            try:
+                with ProfilingContext4DebugL1("step_pre"):
+                    self.model.scheduler.step_pre(step_index=step_index)
 
-            with ProfilingContext4DebugL1("🚀 infer_main"):
-                self.model.infer(self.inputs)
+                with ProfilingContext4DebugL1("🚀 infer_main"):
+                    self.model.infer(self.inputs)
 
-            with ProfilingContext4DebugL1("step_post"):
-                self.model.scheduler.step_post()
+                with ProfilingContext4DebugL1("step_post"):
+                    self.model.scheduler.step_post()
+            finally:
+                if previous_device is not None:
+                    torch.cuda.set_device(previous_device)
 
             if self.progress_callback:
                 self.progress_callback(((step_index + 1) / total_steps) * 100, 100)

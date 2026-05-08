@@ -94,6 +94,8 @@ class AutoencoderKLQwenImageVAE:
 
         self.model.encoder.conv_in = new_enc_conv_in
         self.model.decoder.conv_out = new_dec_conv_out
+        from loguru import logger
+        logger.info(f"Layered VAE conv fix: enc_loaded={enc_loaded}, dec_loaded={dec_loaded}")
 
     @staticmethod
     def _unpack_latents(latents, height, width, vae_scale_factor, layers=None):
@@ -131,13 +133,24 @@ class AutoencoderKLQwenImageVAE:
         if self.is_layered:
             b, c, f, h, w = latents.shape
             latents = latents[:, :, 1:]  # remove the first frame as it is the orgin input
-            latents = latents.permute(0, 2, 1, 3, 4).view(-1, c, 1, h, w)
-            image = self.model.decode(latents, return_dict=False)[0]  # (b f) c 1 h w
-            image = image.squeeze(2)
-            image = self.image_processor.postprocess(image, output_type="pt" if input_info.return_result_tensor else "pil")
+            f = latents.shape[2]
+            output_type = "pt" if input_info.return_result_tensor else "pil"
             images = []
             for bidx in range(b):
-                images.append(image[bidx * f : (bidx + 1) * f])
+                layer_images = []
+                for layer_idx in range(f):
+                    layer_latents = latents[bidx : bidx + 1, :, layer_idx : layer_idx + 1]
+                    layer_image = self.model.decode(layer_latents, return_dict=False)[0]
+                    layer_image = layer_image.squeeze(2)
+                    layer_image = self.image_processor.postprocess(layer_image, output_type=output_type)
+                    layer_images.append(layer_image[0])
+                    # breakpoint()  # for debugging memory usage, can be removed later
+                    del layer_latents, layer_image
+                    torch_device_module.empty_cache()
+                if input_info.return_result_tensor:
+                    images.append(torch.stack(layer_images, dim=0))
+                else:
+                    images.append(layer_images)
         else:
             images = self.model.decode(latents, return_dict=False)[0][:, :, 0]
             images = self.image_processor.postprocess(images, output_type="pt" if input_info.return_result_tensor else "pil")
